@@ -1,0 +1,27 @@
+{
+  "name": "multichain-wallet-lab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "니모닉 생성부터 트랜잭션 서명, ERC-20 승인 감사까지 직접 구현해 본 멀티체인 지갑 실습",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "step1": "node 1_key_derivation.js",
+    "step2": "node 2_onchain_read.js",
+    "step3": "node 3_send_transaction.js",
+    "step4": "node 4_sign_eip712.js",
+    "step5": "node 5_approve_token.js",
+    "step6": "node 6_allowance_audit.js",
+    "step7": "node 7_multichain.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@mysten/sui": "^1.38.0",
+    "@solana/web3.js": "^1.98.4",
+    "bip39": "^3.1.0",
+    "dotenv": "^17.2.1",
+    "ed25519-hd-key": "^2.0.0",
+    "ethers": "^6.15.0"
+  }
+}
