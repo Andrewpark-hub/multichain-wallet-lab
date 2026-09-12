@@ -144,7 +144,7 @@ TO_ADDRESS=0x... ETH_AMOUNT=0.001 SEND_TX=true ./run.sh 3
 ├── 2_onchain_read.js        # Step 2: 멀티체인 잔고 / 블록 / 가스 / ERC-20 조회 스크립트
 ├── 3_send_transaction.js    # Step 3: 사전 검증 → EIP-1559 조립 → 서명 → 전송 → 영수증
 ├── 4_sign_eip712.js         # Step 4: EIP-712 digest 구성 및 서명자 복원 검증
-├── 5_approve_token.js       # Step 5: ERC-20 승인(approve) 및 권한 회수 스크립트
+├── 5_approve_token.js       # Step 5: eth_call 사전 검증 후 ERC-20 승인(approve) 및 권한 회수
 ├── 6_allowance_audit.js     # Step 6: Approval 로그 스캔 기반 살아있는 권한 감사
 ├── 7_multichain.js          # Step 7: 동일 니모닉의 Sui / Solana 주소 파생 및 조회
 ├── shared_data.json         # Step 1에서 생성되어 이후 단계로 전달되는 주소 정보

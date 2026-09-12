@@ -60,7 +60,18 @@ async function main() {
     console.log(`[*] 현재 allowance: ${ethers.formatUnits(before, decimals)} ${symbol}`);
     console.log(`[*] 설정할 금액: ${amount} ${symbol}${amount === '0' ? '  (권한 회수)' : ''}`);
 
-    // 2. calldata 조립 + 가스 추정
+    // 2. eth_call로 먼저 시뮬레이션해본다.
+    // 실제로 보내지 않고 '지금 보내면 성공하는지'만 확인하는 거라 가스가 들지 않는다.
+    try {
+        await token.approve.staticCall(spender, parsed_amount);
+        console.log("\n[*] staticCall(eth_call) 성공 - 지금 보내면 성공한다");
+    } catch (e) {
+        console.log(`\n[!] staticCall 실패 -> ${e.shortMessage || e.message}`);
+        console.log("    이 상태로 보내면 가스만 쓰고 실패하므로 여기서 멈춘다.");
+        return;
+    }
+
+    // 3. calldata 조립 + 가스 추정
     const populated = await token.approve.populateTransaction(spender, parsed_amount);
     let gas_limit = 60000n;
     try {
@@ -72,7 +83,7 @@ async function main() {
     console.log(`[*] 함수 셀렉터: ${populated.data.slice(0, 10)}  (approve(address,uint256))`);
     console.log(`[*] calldata: ${populated.data}`);
 
-    // 3. 서명
+    // 4. 서명
     const nonce = await provider.getTransactionCount(wallet.address, 'pending');
     const fee = await provider.getFeeData();
     const raw_tx = await wallet.signTransaction({
@@ -93,7 +104,7 @@ async function main() {
         return;
     }
 
-    // 4. 전송 후 allowance가 실제로 바뀌었는지 다시 조회
+    // 5. 전송 후 allowance가 실제로 바뀌었는지 다시 조회
     const response = await provider.broadcastTransaction(raw_tx);
     console.log(`\n[*] 전송됨. tx hash: ${response.hash}`);
     const receipt = await response.wait();
