@@ -3,7 +3,6 @@ node_modules/
 .env.local
 .DS_Store
 *.log
-
 *.pdf
 *.rtf
 linkedin_post_*
