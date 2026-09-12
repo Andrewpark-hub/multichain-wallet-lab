@@ -7,4 +7,4 @@ node_modules/
 # 교육 교재 원본 / 개인 메모는 공개 저장소에 올리지 않는다
 *.pdf
 *.rtf
-linkedin_post_*.md
+linkedin_post_*
