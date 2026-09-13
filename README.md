@@ -151,3 +151,162 @@ TO_ADDRESS=0x... ETH_AMOUNT=0.001 SEND_TX=true ./run.sh 3
 ├── .env.example             # 니모닉 및 RPC 설정 템플릿 (.env는 git 추적 제외)
 └── run.sh                   # 단계별 실습 통합 실행 파이프라인
 ```
+
+---
+---
+
+# Multichain HD Wallet — Key Derivation, Transaction Signing, and Approval Auditing
+
+*English version — the Korean original is above.*
+
+![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?style=flat-square&logo=node.js)
+![ethers](https://img.shields.io/badge/ethers-v6-2535a0?style=flat-square)
+![Chains](https://img.shields.io/badge/Chains-Sepolia%20%7C%20Base%20%7C%20Sui%20%7C%20Solana-627EEA?style=flat-square)
+![Safety](https://img.shields.io/badge/Default-dry--run-orange?style=flat-square)
+
+Built on the **2026 Blockchain Meetup Day — Wallet track (part 2)** coursework, this project implements each stage by hand in order to understand a wallet not as "an app called MetaMask" but as a pipeline: **key derivation → signing → broadcast → receipt**. I reproduced by hand the steps a library normally hides — **BIP-39 checksum computation**, **BIP-44 address derivation**, **EIP-1559 transaction assembly**, and **EIP-712 digest construction** — and checked each against the standard reference values. I also added an audit script of my own to trace what struck me most during the course: the risk of **unlimited ERC-20 approvals**.
+
+---
+
+## Key Components
+
+1. **Implementing key derivation by hand and validating it against reference values**
+   - Computes entropy → SHA-256 checksum → 11-bit word indices → mnemonic → PBKDF2 seed without a library, then compares the result against `bip39`
+   - Derives an EVM address directly by taking `keccak256` of the uncompressed public key and keeping the last 20 bytes, then checks it matches the `ethers` result
+   - Shows side by side, on one screen, why the same mnemonic yields different addresses on EVM / Sui / Solana (derivation path, elliptic curve, encoding)
+2. **Separating the transaction lifecycle into distinct stages**
+   - Pre-flight checks with `eth_call` / `estimateGas` → nonce and fee lookup → EIP-1559 (Type 2) object assembly → local signing → broadcast → receipt verification
+   - Confirms that the private key never leaves the machine — signing completes locally — and that block inclusion (`blockNumber`) and successful execution (`status=1`) are two different things
+   - Defaults to a dry run (stops after signing), so a real broadcast happens only when `SEND_TX=true` is set explicitly
+3. **How a signature becomes an authorization (EIP-712), and auditing approvals**
+   - Assembles the digest by hand from `domainSeparator` and `hashStruct`, compares it against the `TypedDataEncoder` result, and recovers the signer from the signature (`ecrecover`)
+   - Demonstrates in code how a Permit signature that looks like a "gasless login" is in fact an unlimited approval
+   - Scans `Approval` event logs in block ranges to reconstruct the list of spenders, then re-queries the **allowance that is actually live right now** — rather than trusting the historical log value — to classify and revoke unlimited approvals
+
+---
+
+## System Architecture & Lifecycle Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User
+    participant Wallet as Wallet (local keys)
+    participant RPC as RPC node
+    participant Chain as Blockchain (Sepolia / Base / Sui / Solana)
+
+    Note over User, Wallet: [Step 1] Key derivation (offline, no network needed) (1_key_derivation.js)
+    User->>Wallet: Entropy → SHA-256 checksum → generate mnemonic
+    Wallet->>Wallet: PBKDF2-HMAC-SHA512 (2048 rounds) → seed → BIP-32 master key
+    Wallet->>Wallet: BIP-44 path derivation → public key → keccak256[-20:] → address
+
+    Note over Wallet, RPC: [Steps 2-3] On-chain reads and transaction signing (2_onchain_read.js, 3_send_transaction.js)
+    Wallet->>RPC: Query balance / block / gas / ERC-20 contract
+    Wallet->>RPC: Pre-flight with eth_call and estimateGas (consumes no gas)
+    RPC-->>Wallet: Success or failure, revert reason, estimated gasLimit
+    Wallet->>Wallet: Assemble the EIP-1559 (Type 2) object and sign locally with the private key
+    Wallet->>RPC: eth_sendRawTransaction (only when SEND_TX=true)
+    RPC->>Chain: mempool → included in a block
+    Chain-->>Wallet: receipt (status, gasUsed, logs)
+
+    Note over User, Chain: [Steps 4-6] Structured signatures and approval auditing (4_sign_eip712.js - 6_allowance_audit.js)
+    User->>Wallet: Request an EIP-712 Permit signature (not a transaction)
+    Wallet->>Wallet: domainSeparator + hashStruct → digest → v/r/s signature
+    Wallet->>Wallet: Recover the signer from the signature and confirm it matches
+    User->>RPC: Scan Approval event logs range by range → reconstruct the spender list
+    RPC-->>User: Re-query current allowance → classify unlimited approvals → revoke with approve(spender, 0)
+```
+
+---
+
+## Tech Stack
+
+| Category | Technology |
+|---|---|
+| **Runtime & Language** | Node.js 20+, JavaScript (CommonJS) |
+| **EVM & Core** | `ethers` v6, EIP-1559 (Type 2), EIP-712, ERC-20 / ERC-2612 |
+| **Key Derivation** | BIP-39, BIP-32, BIP-44, PBKDF2-HMAC-SHA512, secp256k1 / ed25519 |
+| **Multichain SDK** | `@mysten/sui` (gRPC), `@solana/web3.js`, `ed25519-hd-key`, `bip39` |
+| **Networks** | Ethereum Sepolia, Base Sepolia, Sui Testnet, Solana Devnet |
+
+---
+
+## Troubleshooting & Environment Optimization
+
+> **Handling the end of JSON-RPC support on Sui's official public full nodes**
+> - **Problem**: The original lab code, using `SuiClient` against `https://fullnode.testnet.sui.io`, failed with `-32601 Method not found. JSON-RPC on public fullnodes has been deprecated`, blocking every query.
+> - **Root cause**: The Sui Foundation had shut down the JSON-RPC endpoint on public full nodes in favor of gRPC. I also found that `SuiGrpcClient` takes `baseUrl` rather than `url` as its option key — passing the old key through caused `Cannot read properties of undefined (reading 'endsWith')` inside the transport layer.
+> - **Fix**: Switched to `SuiGrpcClient` from `@mysten/sui/grpc` and corrected the option key to `baseUrl`, which restored queries. The gRPC client does not support automatic transaction resolution (`Transaction resolution is not supported with the GRPC client`), so I narrowed Sui's scope to **read-only** for this lab.
+
+> **Block-range limits on event log queries from public RPCs**
+> - **Problem**: Querying `Approval` events in 100,000-block chunks was rejected outright with `-32701 exceed maximum block range: 50000`, making the approval audit impossible.
+> - **Root cause**: Public RPC providers cap the block range per `eth_getLogs` call — but the cap differs by provider (50,000 on publicnode, 10,000 on many commercial RPCs), so tuning to one specific value would just break again after switching RPCs.
+> - **Fix**: Split the scan into `LOG_CHUNK` segments (9,000 blocks by default) that pass on any RPC, iterating through them and continuing past any failed segment with only a warning. Working through this made it concrete **why wallet apps run a separate indexer**.
+
+> **`estimateGas` failing first on a zero-balance account and halting the lab**
+> - **Problem**: Before receiving testnet ETH from a faucet, `estimateGas` failed with `missing revert data`, so the transaction structure itself could never be inspected.
+> - **Root cause**: `estimateGas` verifies whether the call can actually execute, so it throws on insufficient balance — and that exception blocked everything downstream, including the signing stage.
+> - **Fix**: Fall back to the standard ETH transfer value (21,000) when estimation fails, so **previewing the nonce, chainId, and signature structure always works regardless of balance**.
+
+---
+
+## Quick Start
+
+### Prerequisites
+- Node.js 20 or later
+- A **testnet-only** mnemonic (never use the mnemonic of a wallet holding real assets)
+
+### Step 1: Clone and install
+```bash
+git clone https://github.com/Andrewpark-hub/multichain-wallet-lab.git
+cd multichain-wallet-lab
+npm install
+cp .env.example .env      # set MNEMONIC in the .env file
+```
+
+### Step 2: Run the pipeline stages in order
+```bash
+# Step 1: entropy → mnemonic → seed → BIP-44 address derivation (runs without .env)
+./run.sh 1
+
+# Step 2: multichain balance and ERC-20 contract lookups
+./run.sh 2
+
+# Step 3: transaction pre-flight → EIP-1559 assembly → local signing
+./run.sh 3
+
+# Step 4: EIP-712 digest construction → signing → signer recovery
+./run.sh 4
+
+# Step 5: ERC-20 approve and revoke
+SPENDER_ADDRESS=0x... ./run.sh 5
+
+# Step 6: Approval log scan → audit of the permissions that are still live
+./run.sh 6
+
+# Step 7: derive and query Sui / Solana addresses from the same mnemonic
+./run.sh 7
+```
+
+### Step 3: Broadcasting to a real network (optional)
+The default behavior is a dry run that stops after signing. A real broadcast must be turned on **explicitly**.
+```bash
+TO_ADDRESS=0x... ETH_AMOUNT=0.001 SEND_TX=true ./run.sh 3
+```
+
+---
+
+## Directory Structure
+
+```text
+├── 1_key_derivation.js      # Step 1: entropy → checksum → mnemonic → seed → BIP-44 address derivation
+├── 2_onchain_read.js        # Step 2: multichain balance / block / gas / ERC-20 lookups
+├── 3_send_transaction.js    # Step 3: pre-flight → EIP-1559 assembly → sign → send → receipt
+├── 4_sign_eip712.js         # Step 4: EIP-712 digest construction and signer recovery check
+├── 5_approve_token.js       # Step 5: ERC-20 approve and revoke, after an eth_call pre-flight
+├── 6_allowance_audit.js     # Step 6: audit of live permissions, based on an Approval log scan
+├── 7_multichain.js          # Step 7: derive and query Sui / Solana addresses from the same mnemonic
+├── shared_data.json         # Address data produced in Step 1 and passed to later stages
+├── .env.example             # Template for the mnemonic and RPC settings (.env is git-ignored)
+└── run.sh                   # Unified stage-by-stage pipeline runner
+```
